@@ -128,20 +128,7 @@ const AuthSvc = {
         unknown:    'غير_نشط',
       };
 
-      // أولاً — تحقق عبر API (سريع، بدون متصفح)
-      if (creds.auth_token) {
-        const valid = await this._verifyViaAPI(creds);
-        if (valid) {
-          account.status        = 'نشط';
-          account.lastActiveAt  = new Date();
-          account.lastCheckedAt = new Date();
-          await account.save();
-          await log(account._id, 'session', 'health_check', 'success', { state: 'active', method: 'api' });
-          logger.info(`[Auth] Health check @${account.username}: active (API) → نشط`);
-          return { state: 'active', status: 'نشط' };
-        }
-        logger.info(`[Auth] @${account.username} — API token غير صالح، جارٍ فحص المتصفح...`);
-      }
+      // فحص عبر المتصفح مباشرة — الأكثر موثوقية
 
       // ثانياً — فحص عبر المتصفح مع timeout أطول
       const ctx   = await Browser.getContext(account);
@@ -383,16 +370,22 @@ const AuthSvc = {
     try {
       const https  = require('https');
       const BEARER = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
+
+      // بناء الـ cookies
+      let cookie = `auth_token=${creds.auth_token}`;
+      if (creds.session_token) cookie += `; ct0=${creds.session_token}`;
+
       const result = await new Promise((resolve, reject) => {
         const req = https.request({
-          hostname: 'api.x.com',
-          path: '/1.1/account/verify_credentials.json',
+          hostname: 'api.twitter.com',
+          path: '/1.1/account/verify_credentials.json?skip_status=true&include_entities=false',
           method: 'GET',
           headers: {
-            'Authorization': `Bearer ${BEARER}`,
-            'Cookie': `auth_token=${creds.auth_token}${creds.session_token ? `; ct0=${creds.session_token}` : ''}`,
-            ...(creds.session_token ? { 'x-csrf-token': creds.session_token } : {}),
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Authorization':  `Bearer ${BEARER}`,
+            'Cookie':         cookie,
+            'x-csrf-token':   creds.session_token || creds.auth_token.slice(0, 32),
+            'User-Agent':     'TwitterAndroid/10.21.0-release.0 (310210000-r-0) ONEPLUS+A3010/9 (OnePlus;ONEPLUS+A3010;OnePlus;OnePlus3;0;;1;2016)',
+            'x-twitter-client-language': 'en',
           },
         }, (res) => {
           let raw = '';
@@ -400,9 +393,11 @@ const AuthSvc = {
           res.on('end', () => resolve({ status: res.statusCode, body: raw }));
         });
         req.on('error', reject);
-        req.setTimeout(10000, () => { req.destroy(); reject(new Error('timeout')); });
+        req.setTimeout(12000, () => { req.destroy(); reject(new Error('timeout')); });
         req.end();
       });
+
+      logger.info(`[Auth] _verifyViaAPI @${creds.auth_token?.slice(0,8)}… → ${result.status} | ${result.body?.slice(0,80)}`);
       return result.status === 200;
     } catch (e) {
       logger.warn(`[Auth] _verifyViaAPI error: ${e.message}`);
