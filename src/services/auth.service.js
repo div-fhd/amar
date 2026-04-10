@@ -56,17 +56,18 @@ const AuthSvc = {
     const creds = Vault.decryptAccount(account.credentials);
     const ctx   = await Browser.getContext(account);
 
-    // إذا الحساب نشط وعنده token — ثق به مباشرة بدون فتح أي صفحة
-    if (account.status === 'نشط' && creds.auth_token) {
-      logger.info(`[Auth] @${account.username} — trusted active ✓`);
-      return ctx;
-    }
-
-    // إذا عنده جلسة محفوظة — جرب مباشرة
-    const savedSession = await require('./vault.service').loadSession(account._id.toString());
-    if (savedSession) {
-      logger.info(`[Auth] @${account.username} — using saved session`);
-      return ctx;
+    // الخطوة 1: إذا عنده auth_token تحقق منه عبر API مباشرة بدون متصفح
+    // الفورمات الجديد عنده auth_token فقط بدون session_token — نقبل الاثنين
+    if (creds.auth_token) {
+      const valid = await this._verifyViaAPI(creds);
+      if (valid) {
+        account.status       = 'نشط';
+        account.lastActiveAt = new Date();
+        await account.save().catch(() => {});
+        logger.info(`[Auth] @${account.username} — نشط عبر API token ✓`);
+        return ctx;
+      }
+      logger.warn(`[Auth] @${account.username} — API token منتهي`);
     }
 
     const state = await this._classify(account, ctx);
@@ -75,6 +76,12 @@ const AuthSvc = {
     logger.info(`[Auth] @${account.username} — state: ${state}, login required`);
 
     if (!creds.password) {
+      // حدّث حالة الحساب في قاعدة البيانات
+      const statusMap = { expired: 'يحتاج_مصادقة', checkpoint: 'نقطة_تحقق', suspended: 'موقوف', unknown: 'غير_نشط' };
+      account.status        = statusMap[state] || 'يحتاج_مصادقة';
+      account.lastCheckedAt = new Date();
+      await account.save().catch(() => {});
+      logger.warn(`[Auth] @${account.username} — status updated: ${account.status}`);
       throw new Error(`@${account.username}: no password and session is invalid (state: ${state})`);
     }
 
@@ -110,20 +117,6 @@ const AuthSvc = {
   // ── Health check ─────────────────────────────────────────────
   async checkHealth(account) {
     try {
-      const creds = Vault.decryptAccount(account.credentials);
-
-      // إذا عنده auth_token — اعتبره نشط مباشرة
-      if (creds.auth_token) {
-        account.status        = 'نشط';
-        account.lastActiveAt  = new Date();
-        account.lastCheckedAt = new Date();
-        await account.save();
-        await log(account._id, 'session', 'health_check', 'success', { via: 'token' });
-        logger.info(`[Auth] Health check @${account.username}: نشط (token)`);
-        return { state: 'active', status: 'نشط' };
-      }
-
-      // بدون token — فحص عبر المتصفح
       const ctx   = await Browser.getContext(account);
       const state = await this._classify(account, ctx);
       const statusMap = {
@@ -137,10 +130,9 @@ const AuthSvc = {
       account.lastCheckedAt = new Date();
       if (state === 'active') account.lastActiveAt = new Date();
       await account.save();
-      await log(account._id, 'session', 'health_check', 'success', { via: 'browser', state });
+      await log(account._id, 'session', 'health_check', 'success', { state });
       logger.info(`[Auth] Health check @${account.username}: ${state} → ${account.status}`);
       return { state, status: account.status };
-
     } catch (e) {
       account.status     = 'غير_نشط';
       account.statusNote = e.message;
@@ -349,6 +341,38 @@ const AuthSvc = {
     }
 
     return 'unknown';
+  },
+
+  // ── التحقق من صلاحية auth_token عبر API ─────────────────────
+  async _verifyViaAPI(creds) {
+    try {
+      const https  = require('https');
+      const BEARER = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
+      const result = await new Promise((resolve, reject) => {
+        const req = https.request({
+          hostname: 'api.x.com',
+          path: '/1.1/account/verify_credentials.json',
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${BEARER}`,
+            'Cookie': `auth_token=${creds.auth_token}${creds.session_token ? `; ct0=${creds.session_token}` : ''}`,
+            ...(creds.session_token ? { 'x-csrf-token': creds.session_token } : {}),
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          },
+        }, (res) => {
+          let raw = '';
+          res.on('data', c => raw += c);
+          res.on('end', () => resolve({ status: res.statusCode, body: raw }));
+        });
+        req.on('error', reject);
+        req.setTimeout(10000, () => { req.destroy(); reject(new Error('timeout')); });
+        req.end();
+      });
+      return result.status === 200;
+    } catch (e) {
+      logger.warn(`[Auth] _verifyViaAPI error: ${e.message}`);
+      return false;
+    }
   },
 
   // ── Human-like typing ─────────────────────────────────────────

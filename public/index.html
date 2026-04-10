@@ -1024,19 +1024,22 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   <div class="panel" id="p-import">
     <div class="notice notice-info">
       <span class="notice-ico">ℹ</span>
-      <span>الصيغة المدعومة: <code style="font-family:var(--m);background:var(--s3);padding:1px 5px;border-radius:4px">username:password:email:session_token:auth_token</code> — حساب لكل سطر. الحسابات تُضاف إلى قاعدة البيانات فقط ولا تُفتح جلسات تلقائياً.</span>
+      <span>تدعم المنصة عدة صيغ — حساب لكل سطر. الحسابات تُضاف إلى قاعدة البيانات ولا تُفتح جلسات تلقائياً.</span>
     </div>
     <div class="format-box">
-      <span>username</span>:<em>password</em>:<span>email</span>:<em>session_token</em>:<span>auth_token</span><br>
-      brandaccount:<em>Pass123!</em>:<span><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="cdafacaea68daaa0aca4a1e3aea2a0">[email&#160;protected]</a></span>:<em>ct0_token_here</em>:<span>auth_token_here</span><br>
-      techpulse_io:<em>Tech456!</em>:<span></span>:<em></em>:<span></span><br>
-      cryptonews_:<em>Crypto789!</em>:<span><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="6715020427020a060e0b4904080a">[email&#160;protected]</a></span>:<em></em>:<span></span>
+      <span style="color:var(--t2);font-size:10px;letter-spacing:.08em;text-transform:uppercase">الصيغ المدعومة</span><br><br>
+      <span style="color:var(--amb)">① الجديد</span>  <span>login</span>:<em>password</em>:<span>email</span>:<em>mailpassword</em>:<span>authtoken</span>:<em>2fa</em><br>
+      <span style="color:var(--t2)">② القديم</span>   <span>login</span>:<em>password</em>:<span>email</span>:<em>session_token</em>:<span>auth_token</span><br>
+      <span style="color:var(--t2)">③ البسيط</span>  <span>login</span>:<em>password</em><br><br>
+      <span style="color:var(--blu2)">مثال①</span> john_doe:<em>Pass123!</em>:<span>mail[at]gmail.com</span>:<em>gmailPass!</em>:<span>auth_tkn</span>:<em>TOTPSECRET</em><br>
+      <span style="color:var(--t2)">مثال②</span> john_doe:<em>Pass123!</em>:<span>mail[at]gmail.com</span>:<em>ct0_token</em>:<span>auth_tkn</span><br>
+      <span style="font-size:10.5px;color:var(--t3)">+ بروكسي في النهاية: socks5://user:pass@host:port</span>
     </div>
 
     <div class="card" style="margin-bottom:14px">
       <div class="card-h"><span class="card-title">الصق الحسابات</span></div>
       <div class="card-b">
-        <textarea id="bulk-txt" rows="8" placeholder="brandaccount:password:email:session_token:auth_token&#10;handle2:pass2:::&#10;handle3:pass3:email3::" oninput="parseBulk()" style="font-family:var(--m);font-size:12px;direction:ltr"></textarea>
+        <textarea id="bulk-txt" rows="8" placeholder="login:password:email:mailpassword:authtoken:2fa&#10;login2:password2:email2:::&#10;login3:password3" oninput="parseBulk()" style="font-family:var(--m);font-size:12px;direction:ltr"></textarea>
       </div>
     </div>
 
@@ -1080,6 +1083,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
           <option value="safe">آمن — 2 دقيقة</option>
           <option value="manual">يدوي — بلا فحص</option>
         </select>
+      </div>
+      <div class="field" style="grid-column:1/-1">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:12.5px;font-weight:500">
+          <input type="checkbox" id="bulk-update-existing" style="width:14px;height:14px;accent-color:var(--blu)">
+          تحديث الحسابات الموجودة — يُحدّث credentials وال token إذا كان الحساب مضافاً مسبقاً
+        </label>
       </div>
     </div>
 
@@ -1134,14 +1143,65 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
     <!-- نشر جماعي بالـ AI -->
     <div id="at-tweet-multi" class="card" style="display:none">
-      <div class="card-h"><span class="card-title">🤖 نشر جماعي بالذكاء الاصطناعي</span></div>
+      <div class="card-h"><span class="card-title">🚀 نشر جماعي</span></div>
       <div class="card-b">
-        <div class="form-grid">
-          <div class="field"><label>الموضوع</label><input id="tm-topic" type="text" placeholder="مثال: أهمية الاستثمار المبكر"></div>
-          <div class="field"><label>الهاشتاق</label><input id="tm-hashtag" type="text" placeholder="#استثمار #مال" style="direction:ltr"></div>
+
+        <!-- وضع المحتوى -->
+        <div class="field" style="margin-bottom:14px">
+          <label>وضع المحتوى</label>
+          <select id="tm-mode" onchange="onTweetModeChange(this.value)">
+            <option value="ai">🤖 AI — يولّد محتوى مختلف لكل حساب</option>
+            <option value="manual">✍️ يدوي — تغريدة لكل حساب بالترتيب</option>
+            <option value="same">📋 نفس النص — للكل</option>
+          </select>
+        </div>
+
+        <!-- وضع AI -->
+        <div id="tm-ai-opts">
+          <div class="form-grid">
+            <div class="field"><label>الموضوع</label><input id="tm-topic" type="text" placeholder="مثال: أهمية الاستثمار المبكر"></div>
+            <div class="field"><label>الهاشتاق</label><input id="tm-hashtag" type="text" placeholder="#استثمار #مال" style="direction:ltr"></div>
+          </div>
+        </div>
+
+        <!-- وضع يدوي -->
+        <div id="tm-manual-opts" style="display:none">
+          <div class="field" style="margin-bottom:12px">
+            <label>التغريدات <small style="color:var(--t2);font-weight:400">— سطر لكل حساب بالترتيب</small></label>
+            <textarea id="tm-manual-texts" placeholder="تغريدة الحساب الأول&#10;تغريدة الحساب الثاني&#10;تغريدة الحساب الثالث&#10;..." style="min-height:120px;direction:rtl;font-size:12.5px"></textarea>
+          </div>
+        </div>
+
+        <!-- وضع نفس النص -->
+        <div id="tm-same-opts" style="display:none">
+          <div class="field" style="margin-bottom:12px">
+            <label>نص التغريدة</label>
+            <textarea id="tm-same-text" placeholder="اكتب التغريدة هنا…" maxlength="280" style="min-height:90px;direction:rtl"></textarea>
+          </div>
+        </div>
+
+        <!-- صور -->
+        <div class="form-grid" style="margin-bottom:12px">
+          <div class="field">
+            <label>صور مرفقة <small style="color:var(--t2);font-weight:400">— اختياري</small></label>
+            <input id="tm-images" type="file" accept="image/*,video/mp4" multiple onchange="previewTweetImages(this)">
+            <div id="tm-images-preview" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"></div>
+          </div>
+          <div class="field">
+            <label>توزيع الصور</label>
+            <select id="tm-img-order">
+              <option value="same">نفس الصورة للكل</option>
+              <option value="sequential">بالترتيب — كل حساب صورة مختلفة</option>
+              <option value="random">عشوائي</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- إعدادات -->
+        <div class="form-grid" style="margin-bottom:12px">
           <div class="field"><label>الترتيب</label>
             <select id="tm-order">
-              <option value="sequential">تسلسلي (الأول فالأول)</option>
+              <option value="sequential">تسلسلي</option>
               <option value="random">عشوائي</option>
             </select>
           </div>
@@ -1153,7 +1213,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
             </select>
           </div>
         </div>
-        <div class="field" style="margin-bottom:10px">
+
+        <div class="field" style="margin-bottom:12px">
           <label>اختر الحسابات <small style="color:var(--t2)">(Ctrl+Click لاختيار متعدد)</small></label>
           <select id="tm-accounts" multiple style="height:120px;font-family:var(--m)"></select>
         </div>
@@ -1549,7 +1610,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 <!-- إشعارات -->
 <div class="toast-wrap" id="toasts"></div>
 
-<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script src="/socket.io/socket.io.js"></script>
+<script src="/socket.io/socket.io.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
 /* ═══════════════════════════════════════════════════════════════
@@ -2050,7 +2111,7 @@ async function doImport() {
   try {
     const d = await api('/api/v1/accounts/bulk-import', {
       method: 'POST',
-      body: JSON.stringify({ text, defaultNiche: niche, defaultRole: role, stagger }),
+      body: JSON.stringify({ text, defaultNiche: niche, defaultRole: role, stagger, updateExisting: document.getElementById('bulk-update-existing').checked }),
     });
     if (!d) return;
 
@@ -2254,20 +2315,66 @@ async function doReplyMulti() {
   toast(`✅ رد: نجح ${done}${failed ? ' | فشل '+failed : ''}`, done > 0 ? 'ok' : 'err');
 }
 
+function onTweetModeChange(val) {
+  document.getElementById('tm-ai-opts').style.display     = val === 'ai'     ? 'block' : 'none';
+  document.getElementById('tm-manual-opts').style.display = val === 'manual' ? 'block' : 'none';
+  document.getElementById('tm-same-opts').style.display   = val === 'same'   ? 'block' : 'none';
+}
+
+function previewTweetImages(input) {
+  const preview = document.getElementById('tm-images-preview');
+  preview.innerHTML = '';
+  [...input.files].forEach(file => {
+    const url = URL.createObjectURL(file);
+    if (file.type.startsWith('video/')) {
+      preview.innerHTML += `<div style="width:60px;height:52px;background:var(--s4);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--t2);border:1px solid var(--bd)">🎬 فيديو</div>`;
+    } else {
+      preview.innerHTML += `<img src="${url}" style="width:60px;height:52px;object-fit:cover;border-radius:6px;border:1px solid var(--bd)">`;
+    }
+  });
+}
+
 async function doTweetMulti() {
-  const topic   = document.getElementById('tm-topic').value.trim();
-  const hashtag = document.getElementById('tm-hashtag').value.trim();
+  const mode    = document.getElementById('tm-mode').value;
   const order   = document.getElementById('tm-order').value;
   const delayParts = document.getElementById('tm-delay').value.split(',');
   const [minD, maxD] = [+delayParts[0], +delayParts[1]];
-  let   ids = getSelectedAccounts('tm-accounts');
+  let ids = getSelectedAccounts('tm-accounts');
   if (!ids.length) return toast('اختر حساباً على الأقل', 'warn');
-  if (!topic) return toast('أدخل الموضوع', 'warn');
   if (order === 'random') ids = ids.sort(() => Math.random() - 0.5);
 
-  const s = document.getElementById('tm-status');
+  // المحتوى حسب الوضع
+  const topic   = document.getElementById('tm-topic').value.trim();
+  const hashtag = document.getElementById('tm-hashtag').value.trim();
+  const manualTexts = document.getElementById('tm-manual-texts').value.trim()
+    .split('\n').map(l => l.trim()).filter(Boolean);
+  const sameText = document.getElementById('tm-same-text').value.trim();
+
+  if (mode === 'ai'     && !topic)                     return toast('أدخل الموضوع', 'warn');
+  if (mode === 'manual' && !manualTexts.length)         return toast('أدخل التغريدات', 'warn');
+  if (mode === 'same'   && !sameText)                   return toast('أدخل نص التغريدة', 'warn');
+
+  // رفع الصور أولاً
+  const imageFiles = [...(document.getElementById('tm-images').files || [])];
+  let mediaPaths = [];
+  if (imageFiles.length) {
+    const formData = new FormData();
+    imageFiles.forEach(f => formData.append('images', f));
+    try {
+      const r = await fetch('/api/v1/actions/upload-media', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${TOKEN}` },
+        body: formData,
+      });
+      const d = await r.json();
+      mediaPaths = d.paths || [];
+    } catch(e) { return toast('فشل رفع الصور: ' + e.message, 'err'); }
+  }
+
+  const imgOrder = document.getElementById('tm-img-order').value;
+  const s    = document.getElementById('tm-status');
   const prog = document.getElementById('tm-progress');
-  s.textContent = `جارٍ توليد المحتوى لـ ${ids.length} حساب…`;
+  s.textContent = `جارٍ النشر على ${ids.length} حساب…`;
   prog.style.display = 'block';
   prog.innerHTML = '';
 
@@ -2275,17 +2382,21 @@ async function doTweetMulti() {
     const d = await api('/api/v1/actions/tweet-multi', {
       method: 'POST',
       body: JSON.stringify({
-        accountIds: ids,
-        text:       topic,
-        topic:      topic,
-        hashtags:   hashtag,
-        varyText:   true,
-        delayMinMs: minD,
-        delayMaxMs: maxD,
+        accountIds:   ids,
+        mode,
+        text:         mode === 'same' ? sameText : topic,
+        topic:        topic,
+        hashtags:     hashtag,
+        manualTexts:  mode === 'manual' ? manualTexts : [],
+        varyText:     mode === 'ai',
+        mediaPaths,
+        imageOrder:   imgOrder,
+        delayMinMs:   minD,
+        delayMaxMs:   maxD,
       }),
     });
-    s.textContent = `✅ بدأ النشر على ${d.accounts?.length||ids.length} حساب`;
-    prog.innerHTML = `<div style="color:var(--grn)">جارٍ النشر في الخلفية… ستظهر النتائج في سجل النشاط</div>`;
+    s.textContent = `✅ بدأ النشر على ${d.total || ids.length} حساب`;
+    prog.innerHTML = `<div style="color:var(--grn)">جارٍ النشر في الخلفية…</div>`;
   } catch(e) {
     s.textContent = '';
     toast(e.message, 'err');

@@ -25,10 +25,28 @@ const ActionCtrl = {
 
   // ── Multi-account tweet ───────────────────────────────────────
   // Post same text (or AI-varied text) to multiple accounts with delay
+  async uploadMedia(req, res) {
+    const fs   = require('fs');
+    const path = require('path');
+    const dir  = path.join(process.cwd(), 'data', 'media');
+    fs.mkdirSync(dir, { recursive: true });
+    const paths = [];
+    for (const file of (req.files?.images || [])) {
+      const ext  = file.originalname.split('.').pop();
+      const dest = path.join(dir, `media_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`);
+      fs.writeFileSync(dest, file.buffer);
+      paths.push(dest);
+    }
+    res.json({ paths });
+  },
+
   async tweetMulti(req, res) {
-    const { accountIds, text, varyText = false, delayMinMs = 8000, delayMaxMs = 25000, topic, hashtags } = req.body;
+    const { accountIds, text, mode = 'ai', varyText = false, manualTexts = [], delayMinMs = 8000, delayMaxMs = 25000, topic, hashtags, mediaPaths = [], imageOrder = 'same' } = req.body;
     const actualTopic = topic || text;
-    if (!accountIds?.length || !text) return res.status(400).json({ error: 'accountIds[] and text required' });
+    if (!accountIds?.length) return res.status(400).json({ error: 'accountIds[] required' });
+    if (mode === 'ai' && !actualTopic) return res.status(400).json({ error: 'topic required for AI mode' });
+    if (mode === 'manual' && !manualTexts.length) return res.status(400).json({ error: 'manualTexts required for manual mode' });
+    if (mode === 'same' && !text) return res.status(400).json({ error: 'text required for same mode' });
 
     const accounts = await Account.find({ _id: { $in: accountIds }, isActive: true, status: 'نشط' });
     if (!accounts.length) return res.status(400).json({ error: 'No active accounts found' });
@@ -38,29 +56,36 @@ const ActionCtrl = {
 
     // Background execution
     setImmediate(async () => {
-      const textFn = varyText
-        ? async (account) => {
-            try {
-              const sugs = await AISvc.suggestTweets({
-                niche: account.niche || 'general',
-                topic: actualTopic,
-                count: 1,
-              });
-              let generated = sugs[0]?.text || text;
-              if (hashtags && !generated.includes(hashtags.split(' ')[0])) {
-                generated = generated.trim() + '\n\n' + hashtags;
-              }
-              if (generated.length > 280) generated = generated.slice(0, 277) + '…';
-              return generated;
-            } catch { return text; }
+      // توزيع الصور
+      const shuffled = arr => [...arr].sort(() => Math.random() - 0.5);
+      const mediaList = imageOrder === 'random' ? shuffled(mediaPaths) : mediaPaths;
+      const getMedia = (i) => {
+        if (!mediaList.length) return [];
+        if (imageOrder === 'same') return [mediaList[0]];
+        return [mediaList[i % mediaList.length]];
+      };
+
+      const textFn = async (account, i) => {
+        if (mode === 'manual') return manualTexts[i % manualTexts.length];
+        if (mode === 'same')   return text;
+        // AI mode
+        try {
+          const sugs = await AISvc.suggestTweets({ niche: account.niche || 'general', topic: actualTopic, count: 1 });
+          let generated = sugs[0]?.text || text || actualTopic;
+          if (hashtags && !generated.includes(hashtags.split(' ')[0])) {
+            generated = generated.trim() + '\n\n' + hashtags;
           }
-        : () => text;
+          if (generated.length > 280) generated = generated.slice(0, 277) + '…';
+          return generated;
+        } catch { return actualTopic; }
+      };
 
       for (let i = 0; i < accounts.length; i++) {
         const account = accounts[i];
         try {
-          const t = typeof textFn === 'function' ? await textFn(account) : text;
-          const r = await ActionSvc.tweet(account, { text: t });
+          const t = await textFn(account, i);
+          const mediaLocalPaths = getMedia(i);
+          const r = await ActionSvc.tweet(account, { text: t, mediaLocalPaths });
           await Content.create({
             account: account._id, text: t, status: 'منشور',
             publishedAt: new Date(), tweetId: r.tweetId, tweetUrl: r.tweetUrl,

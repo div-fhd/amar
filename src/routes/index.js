@@ -8,6 +8,8 @@ const { authMiddleware } = require('../middleware/index');
 // ── Actions ────────────────────────────────────────────────────
 const actionRouter = express.Router();
 actionRouter.use(authMiddleware);
+const multerAction = require('multer')({ storage: require('multer').memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+actionRouter.post('/upload-media',     multerAction.fields([{ name:'images', maxCount:4 }]), actCtrl.uploadMedia);
 actionRouter.post('/tweet',            actCtrl.tweet);
 actionRouter.post('/tweet-multi',      actCtrl.tweetMulti);
 actionRouter.post('/follow',           actCtrl.follow);

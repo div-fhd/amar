@@ -52,18 +52,29 @@ const AccountCtrl = {
   },
 
   async bulkImport(req, res) {
-    const { text, defaultNiche, defaultTimezone, defaultRole, stagger = 'staggered' } = req.body;
+    const { text, defaultNiche, defaultTimezone, defaultRole, stagger = 'staggered', updateExisting = false } = req.body;
     if (!text) return res.status(400).json({ error: 'text required' });
     const { valid, invalid, total } = parseBulkText(text);
     if (!valid.length) return res.status(400).json({ error: 'No valid accounts found', invalid, total });
 
-    const results = { created: [], skipped: [], errors: [] };
+    const results = { created: [], updated: [], skipped: [], errors: [] };
 
     for (let i = 0; i < valid.length; i++) {
       const row = valid[i];
       try {
-        if (await Account.exists({ username: row.username })) {
-          results.skipped.push(row.username); continue;
+        const existing = await Account.findOne({ username: row.username });
+        if (existing) {
+          if (!updateExisting) { results.skipped.push(row.username); continue; }
+          // تحديث بيانات الحساب الموجود
+          const creds = Vault.encryptAccount(row);
+          existing.credentials = creds;
+          if (row.proxy_url)    existing.network = { ...existing.network, proxyUrl: row.proxy_url };
+          if (defaultRole)      existing.role    = defaultRole;
+          if (defaultNiche)     existing.niche   = defaultNiche;
+          await existing.save();
+          results.updated.push(row.username);
+          logger.info(`[Import] Updated: @${row.username}`);
+          continue;
         }
         const creds = Vault.encryptAccount(row);
         const account = await Account.create({
@@ -166,15 +177,38 @@ const AccountCtrl = {
     res.json(result);
   },
 
+  async suggestBio(req, res) {
+    const account = await Account.findById(req.params.id).select('-credentials').lean();
+    if (!account) return res.status(404).json({ error: 'Account not found' });
+    const result = await AISvc.suggestBio({
+      niche:    account.niche    || req.body.niche    || 'general',
+      name:     account.profile?.displayName || account.username,
+      keywords: req.body.keywords || [],
+    });
+    res.json(result);
+  },
+
+  async stats(req, res) {
+    const [total, byStatus, byRole] = await Promise.all([
+      Account.countDocuments({ isActive: true }),
+      Account.aggregate([{ $match: { isActive:true } }, { $group: { _id:'$status', count:{ $sum:1 } } }]),
+      Account.aggregate([{ $match: { isActive:true } }, { $group: { _id:'$role',   count:{ $sum:1 } } }]),
+    ]);
+    res.json({
+      total,
+      byStatus: byStatus.reduce((a,s)=>{ a[s._id]=s.count; return a; }, {}),
+      byRole:   byRole.reduce((a,r)=>{ a[r._id]=r.count; return a; }, {}),
+    });
+  },
+
+  // ── رفع الصور ──────────────────────────────────────────────────
   async uploadImages(req, res) {
     const fs   = require('fs');
     const path = require('path');
     const dir  = path.join(process.cwd(), 'data', 'images');
     fs.mkdirSync(dir, { recursive: true });
-
     const avatarPaths = [];
     const bannerPaths = [];
-
     const files = req.files || {};
     for (const file of (files.avatars || [])) {
       const dest = path.join(dir, `avatar_${Date.now()}_${file.originalname}`);
@@ -189,6 +223,7 @@ const AccountCtrl = {
     res.json({ avatarPaths, bannerPaths });
   },
 
+  // ── مزامنة بروفايل جماعي ──────────────────────────────────────
   async bulkSyncProfiles(req, res) {
     const { accountIds } = req.body;
     const query = accountIds?.length
@@ -215,6 +250,7 @@ const AccountCtrl = {
     });
   },
 
+  // ── تحديث بروفايل جماعي ──────────────────────────────────────
   async bulkUpdateProfiles(req, res) {
     const { accountIds, updates = {}, namesList = [], locationsList = [], useAI = false, niche, avatarPaths = [], bannerPaths = [], imageOrder = 'sequential' } = req.body;
     const query = accountIds?.length
@@ -232,7 +268,6 @@ const AccountCtrl = {
         const account = accounts[i];
         try {
           let finalUpdates = { ...updates };
-          // الاسم بالترتيب — إذا في قائمة أسماء تأخذ كل حساب اسمه
           if (namesList.length > 0)     finalUpdates.displayName = namesList[i % namesList.length];
           if (locationsList.length > 0) finalUpdates.location    = locationsList[i % locationsList.length];
           if (avatars.length > 0) finalUpdates.avatarPath = avatars[i % avatars.length];
@@ -256,30 +291,6 @@ const AccountCtrl = {
       if (global.io) global.io.emit('profile:update:done', { total: accounts.length, done });
     });
   },
-
-  async suggestBio(req, res) {
-    const account = await Account.findById(req.params.id).select('-credentials').lean();
-    if (!account) return res.status(404).json({ error: 'Account not found' });
-    const result = await AISvc.suggestBio({
-      niche:    account.niche    || req.body.niche    || 'general',
-      name:     account.profile?.displayName || account.username,
-      keywords: req.body.keywords || [],
-    });
-    res.json(result);
-  },
-
-  async stats(req, res) {
-    const [total, byStatus, byRole] = await Promise.all([
-      Account.countDocuments({ isActive: true }),
-      Account.aggregate([{ $match: { isActive:true } }, { $group: { _id:'$status', count:{ $sum:1 } } }]),
-      Account.aggregate([{ $match: { isActive:true } }, { $group: { _id:'$role',   count:{ $sum:1 } } }]),
-    ]);
-    res.json({
-      total,
-      byStatus: byStatus.reduce((a,s)=>{ a[s._id]=s.count; return a; }, {}),
-      byRole:   byRole.reduce((a,r)=>{ a[r._id]=r.count; return a; }, {}),
-    });
-  },
 };
 
-module.exports = AccountCtrl; 
+module.exports = AccountCtrl;
