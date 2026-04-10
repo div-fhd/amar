@@ -11,11 +11,12 @@ const logger   = require('../utils/logger');
 const AccountCtrl = {
 
   async list(req, res) {
-    const { status, role, page = 1, limit = 50, q } = req.query;
+    const { status, role, page = 1, limit = 50, q, isPrimary } = req.query;
     const filter = { isActive: true };
-    if (status) filter.status = status;
-    if (role)   filter.role   = role;
-    if (q)      filter.username = { $regex: q, $options: 'i' };
+    if (status)    filter.status    = status;
+    if (role)      filter.role      = role;
+    if (q)         filter.username  = { $regex: q, $options: 'i' };
+    if (isPrimary) filter.isPrimary = true;
     const [accounts, total] = await Promise.all([
       Account.find(filter).select('-credentials').sort({ createdAt: -1 })
         .skip((page-1)*limit).limit(+limit).lean(),
@@ -25,8 +26,18 @@ const AccountCtrl = {
   },
 
   async get(req, res) {
-    const a = await Account.findById(req.params.id).select('-credentials').lean();
+    const a = await Account.findById(req.params.id).lean();
     if (!a) return res.status(404).json({ error: 'Account not found' });
+    // فك تشفير بيانات الدخول لعرضها في صفحة التعديل
+    try {
+      const creds = Vault.decryptAccount(a.credentials || {});
+      a.email         = creds.email         || '';
+      a.auth_token    = creds.auth_token     || '';
+      a.session_token = creds.session_token  || '';
+      a.totp_secret   = creds.totp_secret    || '';
+      a.mail_password = creds.mail_password  || '';
+    } catch {}
+    delete a.credentials;
     res.json(a);
   },
 
@@ -115,7 +126,7 @@ const AccountCtrl = {
   },
 
   async update(req, res) {
-    const allowed = ['label','niche','tags','role','network','features','dailyCaps','notes','status'];
+    const allowed = ['label','niche','tags','role','network','features','dailyCaps','notes','status','isPrimary'];
     const updates = {};
     for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
     const a = await Account.findByIdAndUpdate(req.params.id, { $set: updates }, { new: true }).select('-credentials');
@@ -134,18 +145,29 @@ const AccountCtrl = {
       auth_token:    req.body.auth_token    || current.auth_token,
       totp_secret:   req.body.totp_secret   || current.totp_secret,
     });
-    await account.save();
-    await Vault.deleteSession(account._id.toString()); // invalidate cached session
-    account.status = 'يحتاج_مصادقة';
-    account.statusNote = 'Credentials updated';
+    // إذا تغير الـ auth_token → أعد المصادقة، وإلا احتفظ بالحالة الحالية
+    const tokenChanged = req.body.auth_token && req.body.auth_token !== current.auth_token;
+    if (tokenChanged) {
+      await Vault.deleteSession(account._id.toString());
+      account.status     = 'يحتاج_مصادقة';
+      account.statusNote = 'Credentials updated';
+    }
     await account.save();
     logger.info(`[Account] Credentials updated: @${account.username}`);
     res.json({ success: true });
   },
 
   async remove(req, res) {
-    await Account.findByIdAndUpdate(req.params.id, { isActive: false });
-    await Vault.deleteSession(req.params.id);
+    const hard = req.query.hard === 'true';
+    if (hard) {
+      await Account.findByIdAndDelete(req.params.id);
+      await Vault.deleteSession(req.params.id);
+      logger.info(`[Account] Deleted permanently: ${req.params.id}`);
+    } else {
+      await Account.findByIdAndUpdate(req.params.id, { isActive: false });
+      await Vault.deleteSession(req.params.id);
+      logger.info(`[Account] Hidden: ${req.params.id}`);
+    }
     res.json({ success: true });
   },
 
@@ -202,6 +224,33 @@ const AccountCtrl = {
   },
 
   // ── رفع الصور ──────────────────────────────────────────────────
+  async bulkCheck(req, res) {
+    const { accountIds } = req.body;
+    const query = accountIds?.length
+      ? { _id: { $in: accountIds }, isActive: true }
+      : { isActive: true };
+    const accounts = await Account.find(query);
+    if (!accounts.length) return res.json({ total: 0 });
+    res.json({ started: true, total: accounts.length });
+    setImmediate(async () => {
+      let done = 0;
+      for (const account of accounts) {
+        try {
+          await AuthSvc.checkHealth(account);
+        } catch(e) {
+          logger.warn(`[BulkCheck] @${account.username}: ${e.message}`);
+        }
+        done++;
+        if (global.io) global.io.emit('account:check:progress', {
+          done, total: accounts.length, username: account.username, status: account.status,
+        });
+        if (done < accounts.length) await new Promise(r => setTimeout(r, 5000));
+      }
+      if (global.io) global.io.emit('account:check:done', { total: accounts.length });
+      logger.info(`[BulkCheck] اكتمل: ${done}/${accounts.length}`);
+    });
+  },
+
   async uploadImages(req, res) {
     const fs   = require('fs');
     const path = require('path');

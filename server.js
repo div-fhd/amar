@@ -106,6 +106,68 @@ cron.schedule('*/2 * * * *', async () => {
   }
 });
 
+// ── CRON: مراقبة المخاطر (كل 30 دقيقة) ──────────────────────
+cron.schedule('*/30 * * * *', async () => {
+  const Account    = require('./src/models/Account');
+  const { RiskEvent } = require('./src/models/index');
+
+  const createRisk = async (account, type, level, description, details = {}) => {
+    // تجنب تكرار نفس المخاطرة لنفس الحساب
+    const exists = await RiskEvent.findOne({ account: account._id, type, resolved: false });
+    if (exists) return;
+    await RiskEvent.create({ account: account._id, type, level, description, details });
+    logger.info(`[Risk] ${level} — @${account.username}: ${description}`);
+    if (global.io) global.io.emit('risk:new', { username: account.username, type, level, description });
+  };
+
+  try {
+    const accounts = await Account.find({ isActive: true });
+
+    for (const account of accounts) {
+      // 1. حساب موقوف أو محظور
+      if (['موقوف','محظور'].includes(account.status)) {
+        await createRisk(account, 'account_suspended', 'critical',
+          `الحساب @${account.username} موقوف أو محظور`, { status: account.status });
+      }
+
+      // 2. حساب يحتاج مصادقة
+      if (account.status === 'يحتاج_مصادقة') {
+        await createRisk(account, 'auth_required', 'high',
+          `الحساب @${account.username} يحتاج إعادة مصادقة`);
+      }
+
+      // 3. تجاوز الحد اليومي للنشر
+      const postCap  = account.dailyCaps?.post  || 10;
+      const postDone = account.todayCounters?.posts || 0;
+      if (postDone >= postCap * 0.9) {
+        await createRisk(account, 'daily_cap_warning', 'medium',
+          `@${account.username} وصل لـ ${postDone}/${postCap} منشور اليوم`,
+          { done: postDone, cap: postCap });
+      }
+
+      // 4. حساب غير نشط أكثر من 3 أيام
+      if (account.lastActiveAt) {
+        const daysSince = (Date.now() - new Date(account.lastActiveAt)) / 86_400_000;
+        if (daysSince > 3 && account.status === 'نشط') {
+          await createRisk(account, 'inactive_account', 'low',
+            `@${account.username} لم ينشط منذ ${Math.floor(daysSince)} أيام`,
+            { daysSince: Math.floor(daysSince) });
+        }
+      }
+
+      // 5. حل المخاطر التي انتهت (الحساب عاد نشطاً)
+      if (account.status === 'نشط') {
+        await RiskEvent.updateMany(
+          { account: account._id, type: { $in: ['auth_required','account_suspended'] }, resolved: false },
+          { $set: { resolved: true, resolvedAt: new Date(), resolution: 'تلقائي — الحساب عاد نشطاً' } }
+        );
+      }
+    }
+  } catch (e) {
+    logger.error(`[Cron] Risk monitor error: ${e.message}`);
+  }
+});
+
 // ── CRON: cleanup old resolved risks (weekly) ────────────────
 cron.schedule('0 4 * * 0', async () => {
   const { RiskEvent } = require('./src/models/index');

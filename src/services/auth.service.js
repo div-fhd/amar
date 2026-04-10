@@ -116,9 +116,10 @@ const AuthSvc = {
 
   // ── Health check ─────────────────────────────────────────────
   async checkHealth(account) {
+    // تأخير عشوائي لتفادي فتح متصفحات متعددة في نفس الوقت
+    await sleep(randInt(0, 2000));
     try {
-      const ctx   = await Browser.getContext(account);
-      const state = await this._classify(account, ctx);
+      const creds = Vault.decryptAccount(account.credentials);
       const statusMap = {
         active:     'نشط',
         expired:    'يحتاج_مصادقة',
@@ -126,11 +127,30 @@ const AuthSvc = {
         suspended:  'موقوف',
         unknown:    'غير_نشط',
       };
+
+      // أولاً — تحقق عبر API (سريع، بدون متصفح)
+      if (creds.auth_token) {
+        const valid = await this._verifyViaAPI(creds);
+        if (valid) {
+          account.status        = 'نشط';
+          account.lastActiveAt  = new Date();
+          account.lastCheckedAt = new Date();
+          await account.save();
+          await log(account._id, 'session', 'health_check', 'success', { state: 'active', method: 'api' });
+          logger.info(`[Auth] Health check @${account.username}: active (API) → نشط`);
+          return { state: 'active', status: 'نشط' };
+        }
+        logger.info(`[Auth] @${account.username} — API token غير صالح، جارٍ فحص المتصفح...`);
+      }
+
+      // ثانياً — فحص عبر المتصفح مع timeout أطول
+      const ctx   = await Browser.getContext(account);
+      const state = await this._classify(account, ctx);
       account.status        = statusMap[state] || 'غير_نشط';
       account.lastCheckedAt = new Date();
       if (state === 'active') account.lastActiveAt = new Date();
       await account.save();
-      await log(account._id, 'session', 'health_check', 'success', { state });
+      await log(account._id, 'session', 'health_check', 'success', { state, method: 'browser' });
       logger.info(`[Auth] Health check @${account.username}: ${state} → ${account.status}`);
       return { state, status: account.status };
     } catch (e) {
@@ -146,24 +166,39 @@ const AuthSvc = {
   async _classify(account, ctx) {
     const page = await ctx.newPage();
     try {
-      await page.goto(X_HOME, { waitUntil: 'domcontentloaded', timeout: 35_000 });
-      await sleep(1500, 2500);
+      await page.goto(X_HOME, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      await sleep(2000, 3000);
+
+      // أغلق cookie popup إذا ظهر
+      await page.evaluate(() => {
+        const btn = [...document.querySelectorAll('button')]
+          .find(b => ['Aceitar','Accept','Recusar','Decline'].some(t => b.textContent.trim().startsWith(t)));
+        if (btn) btn.click();
+      }).catch(() => {});
 
       const url = page.url();
       if (url.includes('/login') || url.includes('/i/flow/login')) return 'expired';
-      if (url.includes('/account/access') || url.includes('/challenge'))  return 'checkpoint';
-      if (url.includes('/suspended'))                                       return 'suspended';
+      if (url.includes('/account/access') || url.includes('/challenge')) return 'checkpoint';
+      if (url.includes('/suspended')) return 'suspended';
 
-      const hasTimeline = await page.locator('[data-testid="primaryColumn"]').count().catch(() => 0);
-      const hasCompose  = await page.locator('[data-testid="SideNav_NewTweet_Button"]').count().catch(() => 0);
+      // انتظر أي علامة على إن الصفحة حملت
+      const ready = await Promise.race([
+        page.locator('[data-testid="primaryColumn"]').waitFor({ timeout: 15_000 }).then(() => true),
+        page.locator('[data-testid="SideNav_NewTweet_Button"]').waitFor({ timeout: 15_000 }).then(() => true),
+      ]).catch(() => false);
 
-      if (hasTimeline > 0 || hasCompose > 0) {
+      if (ready) {
         account.status        = 'نشط';
         account.lastActiveAt  = new Date();
         account.lastCheckedAt = new Date();
         await account.save().catch(() => {});
         return 'active';
       }
+
+      // تحقق مرة ثانية من الـ URL بعد التحميل
+      const url2 = page.url();
+      if (url2.includes('/login') || url2.includes('/i/flow')) return 'expired';
+
       return 'expired';
     } catch (e) {
       logger.warn(`[Auth] classify error @${account.username}: ${e.message}`);

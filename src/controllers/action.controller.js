@@ -5,6 +5,29 @@ const ActionSvc      = require('../services/action.service');
 const AISvc          = require('../services/ai.service');
 const logger         = require('../utils/logger');
 
+// ── نظام Jobs ─────────────────────────────────────────────────
+const activeJobs = new Map();
+let jobCounter = 0;
+function createJob(type, accounts) {
+  const id = ++jobCounter;
+  activeJobs.set(id, { id, type, cancelled: false, accounts: accounts.map(a => a.username), startedAt: new Date() });
+  return id;
+}
+function cancelJob(id) {
+  const job = activeJobs.get(+id);
+  if (job) { job.cancelled = true; return true; }
+  return false;
+}
+function isCancelled(id) {
+  return activeJobs.get(id)?.cancelled === true;
+}
+function finishJob(id) {
+  activeJobs.delete(id);
+}
+function getActiveJobs() {
+  return [...activeJobs.values()];
+}
+
 const ActionCtrl = {
 
   // ── Single tweet ──────────────────────────────────────────────
@@ -25,6 +48,29 @@ const ActionCtrl = {
 
   // ── Multi-account tweet ───────────────────────────────────────
   // Post same text (or AI-varied text) to multiple accounts with delay
+  // ── Jobs ──────────────────────────────────────────────────────
+  listJobs(req, res) {
+    res.json({ jobs: getActiveJobs() });
+  },
+
+  cancelJob(req, res) {
+    const { jobId } = req.params;
+    const ok = cancelJob(jobId);
+    if (ok) {
+      logger.info(`[Jobs] Job ${jobId} cancelled by user`);
+      res.json({ cancelled: true, jobId });
+    } else {
+      res.status(404).json({ error: 'Job not found or already finished' });
+    }
+  },
+
+  cancelAllJobs(req, res) {
+    const jobs = getActiveJobs();
+    jobs.forEach(j => cancelJob(j.id));
+    logger.info(`[Jobs] All ${jobs.length} jobs cancelled`);
+    res.json({ cancelled: jobs.length });
+  },
+
   async uploadMedia(req, res) {
     const fs   = require('fs');
     const path = require('path');
@@ -52,17 +98,26 @@ const ActionCtrl = {
     if (!accounts.length) return res.status(400).json({ error: 'No active accounts found' });
 
     // Respond immediately, run in background
-    res.json({ queued: true, accounts: accounts.map(a => a.username), total: accounts.length });
+    const jobId = createJob('tweet-multi', accounts);
+    res.json({ queued: true, jobId, accounts: accounts.map(a => a.username), total: accounts.length });
 
     // Background execution
     setImmediate(async () => {
-      // توزيع الصور
+      // توزيع الصور — كل تغريدة تأخذ حتى 4 صور
       const shuffled = arr => [...arr].sort(() => Math.random() - 0.5);
       const mediaList = imageOrder === 'random' ? shuffled(mediaPaths) : mediaPaths;
       const getMedia = (i) => {
         if (!mediaList.length) return [];
-        if (imageOrder === 'same') return [mediaList[0]];
-        return [mediaList[i % mediaList.length]];
+        if (imageOrder === 'same') {
+          // نفس المجموعة للكل (حتى 4 صور)
+          return mediaList.slice(0, 4);
+        }
+        if (imageOrder === 'sequential') {
+          // كل حساب يأخذ صورة مختلفة بالترتيب
+          return [mediaList[i % mediaList.length]];
+        }
+        // عشوائي — كل حساب يأخذ صورة عشوائية
+        return [mediaList[Math.floor(Math.random() * mediaList.length)]];
       };
 
       const textFn = async (account, i) => {
@@ -81,6 +136,11 @@ const ActionCtrl = {
       };
 
       for (let i = 0; i < accounts.length; i++) {
+        if (isCancelled(jobId)) {
+          logger.info(`[TweetMulti] job ${jobId} cancelled at ${i}/${accounts.length}`);
+          if (global.io) global.io.emit('job:cancelled', { jobId, type: 'tweet-multi', done: i });
+          break;
+        }
         const account = accounts[i];
         try {
           const t = await textFn(account, i);
@@ -102,7 +162,8 @@ const ActionCtrl = {
           await new Promise(r => setTimeout(r, delay));
         }
       }
-      if (global.io) global.io.emit('tweet:multi:done', { total: accounts.length });
+      finishJob(jobId);
+      if (global.io) global.io.emit('tweet:multi:done', { total: accounts.length, jobId });
       logger.info(`[TweetMulti] Completed for ${accounts.length} accounts`);
     });
   },
