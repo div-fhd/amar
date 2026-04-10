@@ -1110,12 +1110,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       <div class="field"><label>المجال الافتراضي</label>
         <select id="bulk-niche"><option>عام</option><option>تقنية</option><option>SaaS</option><option>كريبتو</option><option>تسويق</option><option>أعمال</option></select>
       </div>
-      <div class="field"><label>وتيرة الفحص</label>
+      <div class="field">
+        <label>الفحص عند الاستيراد</label>
         <select id="bulk-stagger">
-          <option value="staggered">متدرج — 30 ثانية (موصى به)</option>
-          <option value="safe">آمن — 2 دقيقة</option>
-          <option value="manual">يدوي — بلا فحص</option>
+          <option value="manual" selected>بلا فحص — موصى به</option>
         </select>
+        <div style="font-size:11px;color:var(--amb);margin-top:5px">⚠️ الفحص التلقائي معطّل لحماية الحسابات من الحظر — افحص يدوياً بعد الاستيراد</div>
       </div>
       <div class="field" style="grid-column:1/-1">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:12.5px;font-weight:500">

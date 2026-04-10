@@ -98,18 +98,8 @@ const AccountCtrl = {
           network: { proxyUrl: row.proxy_url || null, timezone: defaultTimezone || 'America/New_York' },
         });
 
-        // Staggered session check — do NOT open all browsers at once
-        if (stagger !== 'manual') {
-          const delayMs = stagger === 'safe' ? i * 120_000 : i * 30_000;
-          setTimeout(async () => {
-            try {
-              const acc = await Account.findById(account._id);
-              if (acc) await AuthSvc.checkHealth(acc);
-            } catch (e) {
-              logger.warn(`[Import] Health check @${row.username}: ${e.message}`);
-            }
-          }, delayMs + 3000);
-        }
+        // الفحص التلقائي معطّل — استخدم زر "فحص المحدد" يدوياً
+        // if (stagger !== 'manual') { ... }
 
         results.created.push(row.username);
       } catch (e) {
