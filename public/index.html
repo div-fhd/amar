@@ -925,6 +925,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     <span class="page-title" id="ptitle">نظرة عامة</span>
     <div class="tb-sep"></div>
     <div class="live-pill"><div class="live-dot"></div>مباشر</div>
+    <div id="license-pill" style="display:none;align-items:center;gap:5px;border-radius:20px;padding:3px 10px;font-size:10.5px;font-weight:600;font-family:var(--m)"></div>
     <span class="tb-clock" id="clk">—</span>
     <div id="jobs-indicator" style="display:none;align-items:center;gap:8px;background:rgba(245,166,35,.08);border:1px solid rgba(245,166,35,.2);border-radius:8px;padding:4px 12px">
       <div style="width:6px;height:6px;border-radius:50%;background:var(--amb);animation:blink 1s infinite"></div>
@@ -1152,6 +1153,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       <button class="atab" onclick="showAtab('repost',this)">إعادة تغريد</button>
       <button class="atab" onclick="showAtab('reply',this)">رد</button>
       <button class="atab" onclick="showAtab('search',this)">بحث</button>
+      <button class="atab" onclick="showAtab('report',this)">إبلاغ</button>
       <button class="atab" onclick="showAtab('profile',this)">👤 البروفايل</button>
     </div>
 
@@ -1349,6 +1351,45 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
           <button class="btn btn-p" onclick="doReplyMulti()">إرسال الرد</button>
           <span id="ry-status" style="font-size:12px;color:var(--t2)"></span>
         </div>
+      </div>
+    </div>
+
+    <!-- إبلاغ -->
+    <div id="at-report" class="card" style="display:none">
+      <div class="card-h"><span class="card-title">🚨 إبلاغ جماعي</span></div>
+      <div class="card-b">
+        <div class="notice notice-warn" style="margin-bottom:14px">
+          <span class="notice-ico">⚠</span>
+          <span>للإبلاغ عن حسابات أو تغريدات مسيئة فقط. التأخير 15-25 ثانية بين كل حساب.</span>
+        </div>
+        <div class="form-grid" style="margin-bottom:14px">
+          <div class="field">
+            <label>نوع الإبلاغ</label>
+            <select id="report-type" onchange="onReportTypeChange(this.value)">
+              <option value="account">إبلاغ عن حساب</option>
+              <option value="tweet">إبلاغ عن تغريدة</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>سبب الإبلاغ</label>
+            <select id="report-reason">
+              <option value="spam">سبام</option>
+              <option value="abusive">محتوى مسيء</option>
+              <option value="impersonation">انتحال هوية</option>
+              <option value="sensitive">محتوى حساس</option>
+            </select>
+          </div>
+          <div class="field fg-full">
+            <label id="report-target-label">معرّف الحساب</label>
+            <input id="report-target" type="text" placeholder="@username" style="direction:ltr;font-family:var(--m)">
+          </div>
+        </div>
+        <div id="rp-report-container"></div>
+        <div style="display:flex;gap:10px;align-items:center;margin-top:8px">
+          <button class="btn btn-r" onclick="doReport()">🚨 إبلاغ الآن</button>
+          <span id="report-status" style="font-size:12px;color:var(--t2)"></span>
+        </div>
+        <div id="report-progress" style="display:none;margin-top:12px;padding:10px;background:var(--s3);border-radius:8px;font-size:12px;font-family:var(--m);max-height:150px;overflow-y:auto"></div>
       </div>
     </div>
 
@@ -1707,8 +1748,25 @@ document.addEventListener('DOMContentLoaded', () => {
 function init() {
   tick();
   setInterval(tick, 1000);
+  // استعادة بيانات المستخدم
+  const savedUser = localStorage.getItem('xops_user');
+  if (savedUser) {
+    try {
+      const u = JSON.parse(savedUser);
+      document.getElementById('user-name').textContent = u.name || 'مستخدم';
+      document.getElementById('user-role').textContent = u.role === 'subscriber' ? 'مشترك' : 'مدير النظام';
+      document.getElementById('user-av').textContent   = (u.name||'م')[0].toUpperCase();
+    } catch {}
+  }
+  // إعادة تطبيق الصلاحيات المحفوظة
+  const savedPerms = localStorage.getItem('xops_permissions');
+  if (savedPerms) {
+    try { setTimeout(() => applyPermissions(JSON.parse(savedPerms)), 200); } catch {}
+  }
   loadOverview();
   loadActiveAccounts();
+  loadLicense();
+  setInterval(pollJobs, 5000);
   setInterval(() => {
     if (currentPanel === 'overview') loadOverview();
   }, 30000);
@@ -1733,6 +1791,18 @@ function init() {
     socket.on('tweet:multi:progress', d => {
       const prog = document.getElementById('tm-progress');
       if (prog) prog.innerHTML += `<div>${d.success ? '✅' : '❌'} @${d.username} (${d.done}/${d.total})</div>`;
+    });
+    socket.on('report:progress', d => {
+      const prog = document.getElementById('report-progress');
+      if (prog) {
+        const color = d.success ? 'var(--grn)' : 'var(--red)';
+        prog.innerHTML += `<div style="color:${color}">${d.done}/${d.total} @${d.username}: ${d.success ? '✓ تم' : '✕ ' + (d.error||'فشل')}</div>`;
+        prog.scrollTop = prog.scrollHeight;
+      }
+    });
+    socket.on('report:done', d => {
+      toast(`✅ اكتمل الإبلاغ (${d.done}/${d.total})`, 'ok');
+      document.getElementById('report-status').textContent = '';
     });
     socket.on('risk:new', d => {
       const lvlColors = { critical:'var(--red)', high:'var(--red)', medium:'var(--amb)', low:'var(--grn)' };
@@ -1811,17 +1881,34 @@ async function doLogin() {
     if (!res.ok) { errEl.textContent = data.error || 'خطأ'; errEl.style.display = 'block'; return; }
     TOKEN = data.token;
     localStorage.setItem('xops_token', TOKEN);
-    document.getElementById('user-name').textContent  = data.user.email;
-    document.getElementById('user-role').textContent  = data.user.role;
-    document.getElementById('user-av').textContent    = data.user.email[0].toUpperCase();
+    const userName = data.user.name || data.user.email;
+    document.getElementById('user-name').textContent = userName;
+    document.getElementById('user-role').textContent = data.user.role === 'subscriber' ? 'مشترك' : 'مدير النظام';
+    document.getElementById('user-av').textContent   = userName[0].toUpperCase();
     document.getElementById('login-page').style.display = 'none';
     document.getElementById('app').style.display = 'flex';
+    // حفظ بيانات المستخدم في localStorage
+    localStorage.setItem('xops_user', JSON.stringify({
+      name:        data.user.name || data.user.email,
+      role:        data.user.role,
+      permissions: data.user.permissions || null,
+    }));
+    if (data.user.permissions) {
+      localStorage.setItem('xops_permissions', JSON.stringify(data.user.permissions));
+    }
     init();
+    // تطبيق الصلاحيات بعد ظهور الـ DOM
+    if (data.user.permissions) {
+      const perms = data.user.permissions;
+      setTimeout(() => applyPermissions(perms), 300);
+    }
   } catch(e) { errEl.textContent = e.message; errEl.style.display = 'block'; }
 }
 
 function logout() {
   localStorage.removeItem('xops_token');
+  localStorage.removeItem('xops_permissions');
+  localStorage.removeItem('xops_user');
   TOKEN = '';
   location.reload();
 }
@@ -1895,10 +1982,61 @@ async function stopAllJobs() {
   } catch(e) { toast(e.message, 'err'); }
 }
 
-// بدء polling كل 3 ثوانٍ
-setInterval(pollJobs, 3000);
+// pollJobs يبدأ من init() فقط بعد تسجيل الدخول
+
+// ── الترخيص ───────────────────────────────────────────────────
+async function loadLicense() {
+  try {
+    const d = await api('/api/v1/license');
+    const pill = document.getElementById('license-pill');
+    if (!pill) return;
+    if (d.standalone) { pill.style.display = 'none'; return; }
+    if (d.valid) {
+      const days = d.daysLeft;
+      const color = days <= 3 ? 'rgba(240,72,90,.15)' : days <= 7 ? 'rgba(245,166,35,.12)' : 'rgba(30,212,138,.1)';
+      const tcolor = days <= 3 ? 'var(--red)' : days <= 7 ? 'var(--amb)' : 'var(--grn)';
+      pill.style.display = 'flex';
+      pill.style.background = color;
+      pill.style.color = tcolor;
+      pill.style.border = `1px solid ${tcolor}30`;
+      pill.textContent = `${days} يوم`;
+      pill.title = `اشتراك ${d.subscriber} — ينتهي ${new Date(d.endDate).toLocaleDateString('ar-SA')}`;
+      // إخفاء الميزات الممنوعة
+      setTimeout(() => applyPermissions(d.permissions), 300);
+    } else {
+      pill.style.display = 'flex';
+      pill.style.background = 'rgba(240,72,90,.12)';
+      pill.style.color = 'var(--red)';
+      pill.style.border = '1px solid rgba(240,72,90,.25)';
+      pill.textContent = 'ترخيص منتهي';
+    }
+  } catch {}
+}
+
+function applyPermissions(p) {
+  if (!p) return;
+  var navBtns = document.querySelectorAll('.nav-btn');
+  navBtns.forEach(function(btn) {
+    var oc = btn.getAttribute('onclick') || '';
+    if (p.aiEnabled === false && oc.indexOf('ai') !== -1 && oc.indexOf('nav') !== -1) btn.style.display = 'none';
+    if (p.scheduleEnabled === false && oc.indexOf('schedule') !== -1) btn.style.display = 'none';
+    if (p.profilesEnabled === false && oc.indexOf('profiles') !== -1) btn.style.display = 'none';
+    if (p.bulkImport === false && oc.indexOf('import') !== -1) btn.style.display = 'none';
+  });
+  document.querySelectorAll('.atab').forEach(function(btn) {
+    var oc = btn.getAttribute('onclick') || '';
+    if (p.reportEnabled === false && oc.indexOf('report') !== -1) btn.style.display = 'none';
+    if (p.scheduleEnabled === false && oc.indexOf('schedule') !== -1) btn.style.display = 'none';
+  });
+  var aiOpt = document.querySelector('#tm-mode option[value="ai"]');
+  if (aiOpt && p.aiEnabled === false) aiOpt.style.display = 'none';
+  if (p.maxAccounts) window._maxAccounts = p.maxAccounts;
+}
 
 function refreshCurrent() {
+  // إعادة تطبيق الصلاحيات
+  const savedPerms = localStorage.getItem('xops_permissions');
+  if (savedPerms) { try { applyPermissions(JSON.parse(savedPerms)); } catch {} }
   const panel = document.getElementById('p-' + currentPanel);
   if (panel) {
     if (currentPanel === 'accounts') loadAccounts();
@@ -2456,6 +2594,7 @@ function showAtab(id, btn) {
     'like':        ['lk-acc-container','lk-acc'],
     'repost':      ['rp-acc-container','rp-acc'],
     'reply':       ['ry-acc-container','ry-acc'],
+    'report':      ['rp-report-container','rp-report'],
   };
   if (map[id] && allActiveAccounts.length) {
     buildSmartSelector(map[id][0], map[id][1]);
@@ -2824,6 +2963,50 @@ function previewImages(input, previewId) {
     const url = URL.createObjectURL(file);
     preview.innerHTML += `<img src="${url}" style="width:52px;height:52px;object-fit:cover;border-radius:6px;border:1px solid var(--bd)">`;
   });
+}
+
+// ── الإبلاغ ──────────────────────────────────────────────────
+function onReportTypeChange(val) {
+  const label = document.getElementById('report-target-label');
+  const input = document.getElementById('report-target');
+  if (val === 'account') {
+    label.textContent = 'معرّف الحساب';
+    input.placeholder = '@username';
+  } else {
+    label.textContent = 'رابط التغريدة';
+    input.placeholder = 'https://x.com/user/status/123...';
+  }
+}
+
+async function doReport() {
+  const type   = document.getElementById('report-type').value;
+  const target = document.getElementById('report-target').value.trim();
+  const reason = document.getElementById('report-reason').value;
+  const ids    = getSelectedAccounts('rp-report');
+  const s      = document.getElementById('report-status');
+  const prog   = document.getElementById('report-progress');
+
+  if (!target) return toast('أدخل الهدف', 'warn');
+  if (!ids.length) return toast('اختر حسابات', 'warn');
+  if (!confirm(`إبلاغ عن ${type === 'account' ? 'الحساب' : 'التغريدة'} من ${ids.length} حساب؟`)) return;
+
+  s.textContent = `جارٍ الإبلاغ من ${ids.length} حساب…`;
+  prog.style.display = 'block';
+  prog.innerHTML = '';
+
+  try {
+    const endpoint = type === 'account' ? '/api/v1/actions/report-account' : '/api/v1/actions/report-tweet';
+    const body = type === 'account'
+      ? { accountIds: ids, targetHandle: target, reason }
+      : { accountIds: ids, tweetUrl: target, reason };
+
+    const d = await api(endpoint, { method: 'POST', body: JSON.stringify(body) });
+    s.textContent = `✅ بدأ الإبلاغ من ${d.total} حساب`;
+    prog.innerHTML = `<div style="color:var(--grn)">جارٍ الإبلاغ في الخلفية…</div>`;
+  } catch(e) {
+    s.textContent = '';
+    toast(e.message, 'err');
+  }
 }
 
 async function cancelTweetMultiJob(jobId) {

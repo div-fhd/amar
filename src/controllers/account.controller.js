@@ -17,6 +17,9 @@ const AccountCtrl = {
     if (role)      filter.role      = role;
     if (q)         filter.username  = { $regex: q, $options: 'i' };
     if (isPrimary) filter.isPrimary = true;
+    // تطبيق حد عدد الحسابات للمشترك
+    const maxAcc = req.user?.permissions?.maxAccounts;
+    const effectiveLimit = maxAcc ? Math.min(+limit, maxAcc) : +limit;
     const [accounts, total] = await Promise.all([
       Account.find(filter).select('-credentials').sort({ createdAt: -1 })
         .skip((page-1)*limit).limit(+limit).lean(),

@@ -169,6 +169,62 @@ const ActionCtrl = {
   },
 
   // ── Follow ────────────────────────────────────────────────────
+  async reportAccount(req, res) {
+    const { accountIds, targetHandle, reason = 'spam' } = req.body;
+    if (!accountIds?.length || !targetHandle) return res.status(400).json({ error: 'accountIds[] and targetHandle required' });
+    const accounts = await Account.find({ _id: { $in: accountIds }, isActive: true });
+    if (!accounts.length) return res.status(400).json({ error: 'No active accounts found' });
+
+    const jobId = createJob('report-account', accounts);
+    res.json({ started: true, jobId, total: accounts.length });
+
+    setImmediate(async () => {
+      let done = 0;
+      for (let i = 0; i < accounts.length; i++) {
+        if (isCancelled(jobId)) break;
+        const account = accounts[i];
+        try {
+          await ActionSvc.reportAccount(account, targetHandle, reason);
+          if (global.io) global.io.emit('report:progress', { done: ++done, total: accounts.length, username: account.username, success: true });
+        } catch (e) {
+          logger.warn(`[Report] @${account.username}: ${e.message}`);
+          if (global.io) global.io.emit('report:progress', { done: ++done, total: accounts.length, username: account.username, error: e.message });
+        }
+        if (i < accounts.length - 1) await new Promise(r => setTimeout(r, 15000 + Math.random() * 10000));
+      }
+      finishJob(jobId);
+      if (global.io) global.io.emit('report:done', { total: accounts.length, done });
+    });
+  },
+
+  async reportTweet(req, res) {
+    const { accountIds, tweetUrl, reason = 'spam' } = req.body;
+    if (!accountIds?.length || !tweetUrl) return res.status(400).json({ error: 'accountIds[] and tweetUrl required' });
+    const accounts = await Account.find({ _id: { $in: accountIds }, isActive: true });
+    if (!accounts.length) return res.status(400).json({ error: 'No active accounts found' });
+
+    const jobId = createJob('report-tweet', accounts);
+    res.json({ started: true, jobId, total: accounts.length });
+
+    setImmediate(async () => {
+      let done = 0;
+      for (let i = 0; i < accounts.length; i++) {
+        if (isCancelled(jobId)) break;
+        const account = accounts[i];
+        try {
+          await ActionSvc.reportTweet(account, tweetUrl, reason);
+          if (global.io) global.io.emit('report:progress', { done: ++done, total: accounts.length, username: account.username, success: true });
+        } catch (e) {
+          logger.warn(`[Report] @${account.username}: ${e.message}`);
+          if (global.io) global.io.emit('report:progress', { done: ++done, total: accounts.length, username: account.username, error: e.message });
+        }
+        if (i < accounts.length - 1) await new Promise(r => setTimeout(r, 15000 + Math.random() * 10000));
+      }
+      finishJob(jobId);
+      if (global.io) global.io.emit('report:done', { total: accounts.length, done });
+    });
+  },
+
   async follow(req, res) {
     const { accountId, targetHandle } = req.body;
     if (!accountId || !targetHandle) return res.status(400).json({ error: 'accountId and targetHandle required' });

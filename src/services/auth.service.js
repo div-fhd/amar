@@ -56,19 +56,7 @@ const AuthSvc = {
     const creds = Vault.decryptAccount(account.credentials);
     const ctx   = await Browser.getContext(account);
 
-    // الخطوة 1: إذا عنده auth_token تحقق منه عبر API مباشرة بدون متصفح
-    // الفورمات الجديد عنده auth_token فقط بدون session_token — نقبل الاثنين
-    if (creds.auth_token) {
-      const valid = await this._verifyViaAPI(creds);
-      if (valid) {
-        account.status       = 'نشط';
-        account.lastActiveAt = new Date();
-        await account.save().catch(() => {});
-        logger.info(`[Auth] @${account.username} — نشط عبر API token ✓`);
-        return ctx;
-      }
-      logger.warn(`[Auth] @${account.username} — API token منتهي`);
-    }
+    // الخطوة 1: تجاوز API verify — غير موثوق على السيرفر
 
     const state = await this._classify(account, ctx);
     if (state === 'active') return ctx;
@@ -128,7 +116,7 @@ const AuthSvc = {
         unknown:    'غير_نشط',
       };
 
-      // فحص عبر المتصفح مباشرة — الأكثر موثوقية
+      // فحص عبر المتصفح فقط — الأكثر موثوقية على السيرفر
 
       // ثانياً — فحص عبر المتصفح مع timeout أطول
       const ctx   = await Browser.getContext(account);

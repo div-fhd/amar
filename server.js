@@ -12,6 +12,7 @@ const path        = require('path');
 const cron        = require('node-cron');
 
 const cfg        = require('./src/config');
+const LicenseSvc = require('./src/services/license.service');
 const logger     = require('./src/utils/logger');
 const { connectMongo } = require('./src/db/mongo');
 const { connectRedis } = require('./src/db/redis');
@@ -63,6 +64,28 @@ app.use(errorHandler);
 io.on('connection', socket => {
   logger.info(`[WS] Connected: ${socket.id}`);
   socket.on('disconnect', () => logger.info(`[WS] Disconnected: ${socket.id}`));
+});
+
+// ── License: تحقق عند البدء وكل 6 ساعات ────────────────────
+LicenseSvc.verifyLicense().then(lic => {
+  if (!lic.valid && !lic.standalone) {
+    logger.warn(`[License] ⚠️ ${lic.error || 'ترخيص غير صالح'}`);
+  }
+});
+cron.schedule('0 */6 * * *', () => LicenseSvc.verifyLicense());
+
+// ── API: معلومات الترخيص ──────────────────────────────────────
+app.get('/api/v1/license', (req, res) => {
+  const lic = LicenseSvc.getLicense();
+  res.json({
+    valid:       lic.valid,
+    standalone:  lic.standalone,
+    subscriber:  lic.subscriber,
+    daysLeft:    lic.daysLeft,
+    endDate:     lic.endDate,
+    permissions: lic.permissions,
+    error:       lic.error,
+  });
 });
 
 // ── CRON: reset daily counters (midnight) ────────────────────
@@ -200,14 +223,14 @@ async function start() {
   await connectRedis().catch(() => {}); // Redis is optional
 
   server.listen(cfg.port, () => {
-    logger.info(`[Server] Running at http://localhost:${cfg.port}`);
-    logger.info(`[Server] Dashboard: http://localhost:${cfg.port}`);
-    logger.info(`[Server] Health:    http://localhost:${cfg.port}/health`);
-    logger.info('');
-    logger.info('[Setup] First run? Register admin:');
-    logger.info(`  curl -X POST http://localhost:${cfg.port}/api/v1/auth/register \\`);
-    logger.info(`    -H "Content-Type: application/json" \\`);
-    logger.info(`    -d '{"email":"admin@example.com","password":"YourPass123!"}'`);
+    // logger.info(`[Server] Running at http://localhost:${cfg.port}`);
+    // logger.info(`[Server] Dashboard: http://localhost:${cfg.port}`);
+    // logger.info(`[Server] Health:    http://localhost:${cfg.port}/health`);
+    // logger.info('');
+    // logger.info('[Setup] First run? Register admin:');
+    // logger.info(`  curl -X POST http://localhost:${cfg.port}/api/v1/auth/register \\`);
+    // logger.info(`    -H "Content-Type: application/json" \\`);
+    // logger.info(`    -d '{"email":"admin@example.com","password":"YourPass123!"}'`);
     logger.info('');
   });
 }
